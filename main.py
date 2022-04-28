@@ -8,7 +8,7 @@ import pandas_datareader as web
 import matplotlib.pyplot as plt
 plt.style.use("fivethirtyeight")
 warnings.filterwarnings('ignore')
-from tensorflow.keras.models import 
+from tensorflow.keras.models import load_model
 
 st.title('Stock Predictor')
 
