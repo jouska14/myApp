@@ -22,8 +22,8 @@ st.write('---')
 
 # Sidebar
 st.sidebar.subheader('Choose Your Query Parameter ')
-start_date = st.sidebar.date_input("Start Date", datetime.date(1999,1,1))
-end_date = datetime.date.today().strftime("%Y-%m-%d")
+start_date = st.sidebar.date_input("Start Date", date(1999,1,1))
+end_date = date.today().strftime("%Y-%m-%d")
 
 ##### Dropdown to choose ticker #####
 ticker = st.selectbox("Choose ticker :", ['AAPL [Apple]'
