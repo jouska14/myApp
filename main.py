@@ -32,7 +32,7 @@ stocks = ('AAPL','GOOGL', 'MSFT', 'LNVGY', 'AMZN','INTC')
 
 tickerSymbol = st.sidebar.selectbox('Stock Ticker',stocks)
 tickerData = yf.Ticker(tickerSymbol) #get ticker data
-tickerDf = tickerData.history(period = '1d' , start_date, end_date)
+tickerDf = tickerData.history(period = '1d', start_date, end_date)
 
 st.subheader('Ticker Data ') 
 st.write(tickerDf)
