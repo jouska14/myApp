@@ -1,14 +1,17 @@
-import os
-import pickle
-import warnings
-import numpy as np
 import streamlit as st
-from datetime import date
-import pandas_datareader as web
-import matplotlib.pyplot as plt
-plt.style.use("fivethirtyeight")
-warnings.filterwarnings('ignore')
-from tensorflow.keras.models import load_model
+import yfinance as yf
+import pandas as pd
+import datetime
+import numpy as np
+import plotly.express as px
+from plotly import graph_objs as go
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+import tensorflow as tf
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.layers import LSTM
+import math
 
 st.title('Stock Predictor')
 
@@ -22,126 +25,151 @@ st.write('---')
 
 # Sidebar
 st.sidebar.subheader('Choose Your Query Parameter ')
-start_date = st.sidebar.date_input("Start Date", date(1999,1,1))
-end_date = date.today().strftime("%Y-%m-%d")
+start_date = st.sidebar.date_input("Start Date", datetime.date(2012,1,1))
+end_date = datetime.date.today()
 
-##### Dropdown to choose ticker #####
-ticker = st.selectbox("Choose ticker :", ['AAPL [Apple]'
-                                 #'FB [Facebook]',
-                                 #'HDB [HDFC Bank Limited]',
-                                 #'MSFT [Microsoft]',
-                                 #'TSLA [Tesla, Inc.]'
-                                ])
+stocks = ('AAPL','GOOGL', 'MSFT', 'LNVGY', 'AMZN','INTC')
 
-# Extract stock ticker
-stock_ticker = ticker.split(' ')[0]
-stock_comp = ticker.split(' ')[1]
-stock_comp = stock_comp[1:-1]
+tickerSymbol = st.sidebar.selectbox('Stock Ticker',stocks)
+tickerData = yf.Ticker(tickerSymbol) #get ticker data
+tickerDf = tickerData.history(start_date, end_date)
 
+st.subheader('Ticker Data ') 
+st.write(tickerDf)
 
-plot_df = web.DataReader(stock_ticker, data_source='yahoo', start=start_date, end=end_date)
-st.write(plot_df)
+def plot_raw_data():
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=tickerDf['Date'], y=tickerDf['Close'],  name='Stock Close'))
+    fig.update_layout(title="This is the Trend in the Raw Data")
+    st.plotly_chart(fig)
+  
+  
+plot_raw_data()
+data_close = tickerDf['Close']
+scaler = MinMaxScaler(feature_range = (0,1))
+data_close = scaler.fit_transform(np.array(data_close).reshape(-1,1))
 
+#Split the data into train and test split
+training_size = int(len(data_close)*0.65)
+test_size = len(data_close)-training_size
+train_data, test_data = data_close[0:training_size,:], data_close[training_size:len(data_close)]
 
-##### Displaying `Close` Price chart #####  
-fig = plt.figure(figsize=(12,5))
-plt.title(stock_comp + " - Stock Price History")
-plt.plot(plot_df['Close'])
-plt.xlabel("Years")
-plt.ylabel("Close Price in USD($)")
-st.pyplot(fig)
+@st.cache
+def create_dataset(dataset, time_step = 1):
+    dataX, dataY = [], []
+    for i in range(len(dataset) - time_step - 1):
+        a = dataset[i:(i+time_step),0]
+        dataX.append(a)
+        dataY.append(dataset[i+time_step, 0])
+    return np.array(dataX), np.array(dataY)
+                     
+time_step = 200
+x_train, y_train = create_dataset(train_data, time_step)
+x_test, y_test = create_dataset(test_data, time_step)
+                     
+#reshape the input to be [sample, time steps, features] which is the requirement of LSTM
+x_train = x_train.reshape(x_train.shape[0], x_train.shape[1], 1)
+x_test = x_test.reshape(x_test.shape[0], x_test.shape[1], 1)
 
-# Insert empty line
-st.progress(100)
+                     
+#Create the LSTM model
+model = Sequential() 
+model.add(LSTM(50 ,return_sequences = True, input_shape = (200,1)))
+model.add(LSTM(50, return_sequences= True))
+model.add(LSTM(50))
+model.add(Dense(1))
+model.compile(loss = 'mean_squared_error', optimizer = 'adam')
+model.summary()   
 
-nb_days = st.selectbox("Get Stock Price Forecast for :", ['1 Day', '2 Days', '3 Days'])
+model.fit(x_train,y_train, validation_data=(x_test,y_test), epochs=4, batch_size=70, verbose=1)
 
-# define a placeholder
-ph = st.empty()
+#Lets predict and check performance metrics
+train_predict = model.predict(x_train)
+test_predict = model.predict(x_test)
 
-# Logger function for UI
-def logger(ph, message):
-    if message == "":
-        ph.write(message)
+#Transform back to original form
+train_predict = scaler.inverse_transform(train_predict)
+test_predict = scaler.inverse_transform(test_predict)
+
+#Calculate RMSE performance metrics
+math.sqrt(mean_squared_error(y_train, train_predict))
+#Plotting
+
+#Shift train prediction for plotting
+look_back = 200
+trainPredictPlot = np.empty_like(data_close)
+trainPredictPlot[:,:] = np.nan
+trainPredictPlot[look_back:len(train_predict) + look_back, :] = train_predict
+
+#Shift test prediction for plotting
+testPredictPlot = np.empty_like(data_close)
+testPredictPlot[:,:] = np.nan
+testPredictPlot[len(train_predict) + (look_back * 2)+1:len(data_close) - 1, :] = test_predict
+itdc = pd.DataFrame(scaler.inverse_transform(data_close))
+
+#Plot baseline and predictions
+tpp = pd.DataFrame(trainPredictPlot)
+
+tepp = pd.DataFrame(testPredictPlot)
+
+agree= st.checkbox('Want to see How the Data is splitted ? ')
+if agree:
+   fig = go.Figure()
+   fig.add_trace(go.Scatter(x=data['Date'], y=itdc[0], name='Closing Price'))
+   fig.add_trace(go.Scatter(x=data['Date'], y=tpp[0], name='Train Predict'))
+   fig.add_trace(go.Scatter(x=data['Date'], y=tepp[0], name='Test Predict'))
+   st.plotly_chart(fig)
+
+x_input = test_data[len(test_data)-200:].reshape(-1,1,1)
+
+temp_input=list(x_input)
+temp_input=temp_input[0].tolist()
+
+lst_output=[]
+n_steps=200
+i=0
+while(i<30):
+    
+    if(len(temp_input)>200):
+        #print(temp_input)
+        x_input=np.array(temp_input[1:])
+       
+        x_input=x_input.reshape(1,-1,1)
+        x_input = x_input.reshape((1, n_steps, 1))
+        #print(x_input)
+        yhat = model.predict(x_input, verbose=0)
+        temp_input.extend(yhat[0].tolist())
+        temp_input=temp_input[1:]
+        #print(temp_input)
+        lst_output.extend(yhat.tolist())
+        i=i+1
     else:
-        ph.write("[INFO] " + message + "...")
+        x_input = x_input.reshape((1, n_steps,1))
+        yhat = model.predict(x_input, verbose=0)
+        temp_input.extend(yhat[0].tolist())
+        lst_output.extend(yhat.tolist())
+        i=i+1
+    
+day_new = pd.DataFrame(np.arange(1,201))
+day_pred = pd.DataFrame(np.arange(201,231))
 
-# Function to get forecast after button click
-def getForecast(ticker, nb_days):
-    
-    # Get the stock price data and store in temp datagframe
-    curr_date = str(date.today())
-    df = web.DataReader(stock_ticker, data_source='yahoo', start='2010-01-01', end=curr_date)
-    temp_df = df.iloc[len(df)-90 : len(df), :]
-    
-    
-    # get 'Close' price and covert to numpy array
-    user_data = temp_df['Close'].values
-    
-    
-    # Load model and scaler
-    model_path, scaler_path = "", ""
-    cwd = os.getcwd()
-    if ticker == 'AAPL':
-        if nb_days == '1 Day':
-            # NOTE : COMMENTED PATH WORK ON LOCAL SYSTEM AND UNCOMMENTED ONES WORK FOR WEB APP
-            #model_path = cwd + '\\Apple\\AAPL_1_day_SPF_model'
-            #scaler_path = cwd + '\\Apple\\AAPL_1_day_SPF_scaler.pkl'
-            model_path = cwd + '/Apple/AAPL_1_day_SPF_model'
-            scaler_path = cwd + '/Apple/AAPL_1_day_SPF_scaler.pkl'
-        elif nb_days == '2 Days':
-            #model_path = cwd + '\\Apple\\AAPL_2_days_SPF_model'
-            #scaler_path = cwd + '\\Apple\\AAPL_2_days_SPF_scaler.pkl'
-            model_path = cwd + '/Apple/AAPL_2_days_SPF_model'
-            scaler_path = cwd + '/Apple/AAPL_2_days_SPF_scaler.pkl'
-        else:
-            #model_path = cwd + '\\Apple\\AAPL_3_days_SPF_model'
-            #scaler_path = cwd + '\\Apple\\AAPL_3_days_SPF_scaler.pkl'
-            model_path = cwd + '/Apple/AAPL_3_days_SPF_model'
-            scaler_path = cwd + '/Apple/AAPL_3_days_SPF_scaler.pkl'
-    logger(ph, "Loading saved model")
-    model = load_model(model_path)
-    logger(ph, "Loading saved scaler")
-    f = open(scaler_path, 'rb')
-    scaler = pickle.load(f)
-    
-    
-    # Scale the data 
-    user_data = user_data.reshape(1, user_data.shape[0])
-    user_data = scaler.transform(user_data)
-    
-    
-    # Convert shape and form of data that is accepted by LSTM RNN
-    user_data = np.reshape(user_data, (user_data.shape[0], user_data.shape[1], 1))
-    
-    
-    # Predict next day stock price
-    logger(ph, "Predicting stock price(s)")
-    prediction = model.predict(user_data)
-    print(prediction)
-    return prediction
+dp1 = pd.DataFrame(scaler.inverse_transform(data_close[(len(data_close)-200):]))
+dp2 = pd.DataFrame(scaler.inverse_transform(lst_output))
 
-##### Button to get desired forecast #####
-if st.button("Get Forecast"):
-    priceForecast = getForecast(stock_ticker, nb_days)
-    logger(ph, "")
-    if nb_days == '1 Day':
-        priceForecastDay1 = round(priceForecast[0][0], 4)
-        st.success("Next " + nb_days + " stock price forecast (in $) :\n\n " + 
-                   "**Day 1** : " + str(priceForecastDay1))
-    elif nb_days == '2 Days':
-        priceForecastDay1 = round(priceForecast[0][0], 4)
-        priceForecastDay2 = round(priceForecast[0][1], 4)
-        st.success("Next " + nb_days + " stock price forecast (in $) :\n\n" + 
-                   "**Day 1** : " + str(priceForecastDay1) + "\n\n" 
-                   "**Day 2** : " + str(priceForecastDay2))
-    else:
-        priceForecastDay1 = round(priceForecast[0][0], 4)
-        priceForecastDay2 = round(priceForecast[0][1], 4)
-        priceForecastDay3 = round(priceForecast[0][2], 4)
-        st.success("Next " + nb_days + " stock price forecast (in $) :\n\n" + 
-                   "**Day 1** : " + str(priceForecastDay1) + "\n\n" +  
-                   "**Day 2** : " + str(priceForecastDay2) + "\n\n" + 
-                    "**Day 3** : " + str(priceForecastDay3))
+st.write('Hey ! Look what our LSTM  Predicted ....Just a min')
 
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=day_new[0], y=dp1[0],  name='Prev 100 days Test data '))
+fig.add_trace(go.Scatter(x=day_pred[0], y=dp2[0], name='30 days predict'))
+st.plotly_chart(fig)
 
+df1=data_close.tolist()
+df1.extend(lst_output)
+
+st.write('More clearer way for Analyzing The Results.' )
+
+df1=scaler.inverse_transform(df1).tolist()
+
+st.line_chart(df1)
+         
+st.write('And Done!!!!  ')
